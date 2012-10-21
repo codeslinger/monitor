@@ -32,6 +32,7 @@ var labelToType = map[string]SampleType {
 
 var MalformedSampleSyntax = errors.New("malformed sample syntax")
 var UnknownSampleType = errors.New("unknown sample type specified")
+var InvalidTimestamp = errors.New("timestamp value out of range")
 
 const sampFmt string = "%d|%s:%d|%s\n"
 
@@ -65,11 +66,11 @@ func ParseSample(buf string) (*Sample, error) {
   if ts < 0 {
     return nil, InvalidTimestamp
   }
+  s.Timestamp = MSToTime(ts)
   it, ok := labelToType[t]
   if !ok {
     return nil, UnknownSampleType
   }
-  s.Timestamp = MSToTime(ts)
   s.Type = it
   return s, nil
 }
