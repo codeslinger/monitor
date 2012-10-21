@@ -56,7 +56,7 @@ func ParseSample(buf string) (*Sample, error) {
   s := &Sample{}
   t := ""
   ts := -1
-  n, err := fmt.Scanf(sampFmt, ts, s.Name, s.Value, t)
+  n, err := fmt.Sscanf(buf, sampFmt, ts, s.Name, s.Value, t)
   if err != nil {
     return nil, err
   }
