@@ -34,7 +34,6 @@ var MalformedSampleSyntax = errors.New("malformed sample syntax")
 var UnknownSampleType = errors.New("unknown sample type specified")
 
 const sampFmt string = "%d|%s:%d|%s\n"
-const ns_per_ms int64 = 1000 * 1000
 
 // Create a new Sample record for a gauge sample.
 func NewGauge(name string, value int64, t SampleType) *Sample {
