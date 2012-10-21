@@ -48,15 +48,15 @@ func NewCounter(name string, value int64) *Sample {
 
 // Serialize this Sample to a string.
 func (s *Sample) String() string {
-  return fmt.Sprintf(sampFmt, NowMS() s.Name, s.Value, typeToLabel[s.Type])
+  return fmt.Sprintf(sampFmt, NowMS(), s.Name, s.Value, typeToLabel[s.Type])
 }
 
 // Deserialize a Sample record from a string.
 func ParseSample(buf string) (*Sample, error) {
+  var ts int64 = -1
   s := &Sample{}
-  t := ""
-  ts := -1
-  n, err := fmt.Sscanf(buf, sampFmt, ts, s.Name, s.Value, t)
+  typ := ""
+  n, err := fmt.Sscanf(buf, sampFmt, ts, s.Name, s.Value, typ)
   if err != nil {
     return nil, err
   }
@@ -67,7 +67,7 @@ func ParseSample(buf string) (*Sample, error) {
     return nil, InvalidTimestamp
   }
   s.Timestamp = MSToTime(ts)
-  it, ok := labelToType[t]
+  it, ok := labelToType[typ]
   if !ok {
     return nil, UnknownSampleType
   }
