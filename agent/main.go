@@ -7,6 +7,7 @@ import (
   "os/signal"
   "runtime"
   "time"
+  "../util"
 )
 
 var sampleInterval int
@@ -19,7 +20,7 @@ func init() {
 
 func main() {
   flag.Parse()
-  if err := StartLogger(); err != nil {
+  if err := util.StartLogger(); err != nil {
     fmt.Println("could not start logger!")
     return
   }
@@ -28,7 +29,7 @@ func main() {
   signalChan := make(chan os.Signal, 1)
   signal.Notify(signalChan, os.Interrupt, os.Kill)
 
-  LOG.Printf("agent started: sampling every %d seconds", sampleInterval)
+  util.Log("agent started: sampling every %d seconds", sampleInterval)
   ticker := time.NewTicker(time.Duration(sampleInterval) * time.Second)
   for {
     select {
@@ -36,7 +37,7 @@ func main() {
       // TODO: do a sampling here
       break
     case s := <-signalChan:
-      LOG.Printf("caught signal %s: shutting down", s)
+      util.Log("caught signal %s: shutting down", s)
       return
     }
   }
