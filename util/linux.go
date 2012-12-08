@@ -4,15 +4,15 @@ package util
 // #include <errno.h>
 import "C"
 
-var HZ = getHZ()
+var HZ uint64 = getHZ()
 
-func getHZ() uint {
+func getHZ() uint64 {
   var ticks C.long
 
   ticks, err := C.sysconf(C._SC_CLK_TCK)
   if err != nil {
     panic(err)
   }
-  return uint(ticks)
+  return uint64(ticks)
 }
 
