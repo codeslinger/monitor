@@ -2,6 +2,7 @@ package linux
 
 import (
   "fmt"
+  "log"
   "strconv"
   "strings"
   "syscall"
@@ -14,6 +15,7 @@ var linuxStatsFiles = map[string]util.LineParser{
   "/proc/meminfo":   parseMeminfoLine,
   "/proc/diskstats": parseDiskstatLine,
   "/etc/mtab":       parseMtabLine,
+  "/proc/net/dev":   parseNetdevLine,
 }
 
 func StandardStats() []*util.Sample {
@@ -21,6 +23,7 @@ func StandardStats() []*util.Sample {
   for path, parser := range linuxStatsFiles {
     s, err := util.StatsFromFile(path, parser)
     if err != nil {
+      log.Printf("parser failure: %s: %s\n", path, err)
       continue
     }
     for _, v := range s {
@@ -168,6 +171,41 @@ func parseMtabLine(line string) ([]*util.Sample, error) {
     util.NewSample(fmt.Sprintf("fs.%s.avail", mount), buf.Bavail * to1K),
     util.NewSample(fmt.Sprintf("fs.%s.inode", mount), buf.Files),
     util.NewSample(fmt.Sprintf("fs.%s.ifree", mount), buf.Ffree),
+  }
+  return samples, nil
+}
+
+func parseNetdevLine(line string) ([]*util.Sample, error) {
+  if strings.Contains(line, "|") {
+    return nil, nil
+  }
+
+  var dev string
+  var rx_byte, rx_pkt, rx_err, rx_drop uint64
+  var rx_fifo, rx_frame, rx_comp, rx_mcast uint64
+  var tx_byte, tx_pkt, tx_err, tx_drop uint64
+  var tx_fifo, tx_coll, tx_carr, tx_comp uint64
+
+  _, err := fmt.Sscanf(
+    line,
+    "%s: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
+    &dev,
+    &rx_byte, &rx_pkt, &rx_err, &rx_drop,
+    &rx_fifo, &rx_frame, &rx_comp, &rx_mcast,
+    &tx_byte, &tx_pkt, &tx_err, &tx_drop,
+    &tx_fifo, &tx_coll, &tx_carr, &tx_comp)
+  if err != nil {
+    return nil, err
+  }
+  samples := []*util.Sample{
+    util.NewSample("net.%s.rx.bytes", rx_byte),
+    util.NewSample("net.%s.rx.pkts", rx_pkt),
+    util.NewSample("net.%s.rx.errs", rx_pkt),
+    util.NewSample("net.%s.rx.drop", rx_pkt),
+    util.NewSample("net.%s.tx.bytes", tx_byte),
+    util.NewSample("net.%s.tx.pkts", tx_pkt),
+    util.NewSample("net.%s.tx.errs", tx_err),
+    util.NewSample("net.%s.tx.drop", tx_drop),
   }
   return samples, nil
 }
