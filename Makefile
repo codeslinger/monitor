@@ -20,5 +20,7 @@ $(BUILDDIR)/collector: $(COLLECTOR_SRCS)
 clean:
 	rm -rf $(BUILDDIR)
 
-.PHONY: all clean $(BIN)
+over: clean all
+
+.PHONY: all clean over $(BIN)
 
