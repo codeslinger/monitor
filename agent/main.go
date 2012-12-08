@@ -2,12 +2,12 @@ package main
 
 import (
   "flag"
-  "fmt"
+  "log"
   "os"
   "os/signal"
   "runtime"
   "time"
-  "../util"
+  "./linux"
 )
 
 var sampleInterval int
@@ -20,24 +20,20 @@ func init() {
 
 func main() {
   flag.Parse()
-  if err := util.StartLogger(); err != nil {
-    fmt.Println("could not start logger!")
-    return
-  }
   runtime.GOMAXPROCS(runtime.NumCPU())
 
   signalChan := make(chan os.Signal, 1)
   signal.Notify(signalChan, os.Interrupt, os.Kill)
 
-  util.Log("agent started: sampling every %d seconds", sampleInterval)
+  log.Printf("agent started: sampling every %d seconds\n", sampleInterval)
   ticker := time.NewTicker(time.Duration(sampleInterval) * time.Second)
   for {
     select {
     case <-ticker.C:
-      // TODO: do a sampling here
+      linux.StandardStats()
       break
     case s := <-signalChan:
-      util.Log("caught signal %s: shutting down", s)
+      log.Printf("caught signal %s: shutting down\n", s)
       return
     }
   }
