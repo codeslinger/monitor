@@ -62,12 +62,12 @@ func parseStatLine(line string) ([]*util.Sample, error) {
   // Individual CPU usage line; calculate per-CPU metrics with this.
   idx := strings.Replace(dev, "cpu", "", 1)
   samples := []*util.Sample{
-    util.NewSample(fmt.Sprintf("cpu.%s.user", idx),   user / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.nice", idx),   nice / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.sys", idx),    sys / util.HZ),
+    util.NewSample(fmt.Sprintf("cpu.%s.user", idx), user / util.HZ),
+    util.NewSample(fmt.Sprintf("cpu.%s.nice", idx), nice / util.HZ),
+    util.NewSample(fmt.Sprintf("cpu.%s.sys", idx), sys / util.HZ),
     util.NewSample(fmt.Sprintf("cpu.%s.iowait", idx), iowait / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.steal", idx),  steal / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.idle", idx),   idle / util.HZ),
+    util.NewSample(fmt.Sprintf("cpu.%s.steal", idx), steal / util.HZ),
+    util.NewSample(fmt.Sprintf("cpu.%s.idle", idx), idle / util.HZ),
   }
   return samples, nil
 }
@@ -133,11 +133,15 @@ func parseDiskstatLine(line string) ([]*util.Sample, error) {
   if err != nil {
     return nil, err
   }
+  // skip garbage devices
+  if strings.HasPrefix(dev, "ram") || strings.HasPrefix(dev, "loop") {
+    return nil, nil
+  }
   samples := []*util.Sample{
-    util.NewSample(fmt.Sprintf("disk.rop.%s", dev), rd_ios),
-    util.NewSample(fmt.Sprintf("disk.wop.%s", dev), wr_ios),
-    util.NewSample(fmt.Sprintf("disk.rkb.%s", dev), rd_sec / 2),
-    util.NewSample(fmt.Sprintf("disk.wkb.%s", dev), wr_sec / 2),
+    util.NewSample(fmt.Sprintf("disk.%s.rd_op", dev), rd_ios),
+    util.NewSample(fmt.Sprintf("disk.%s.rd_kb", dev), rd_sec / 2),
+    util.NewSample(fmt.Sprintf("disk.%s.wr_op", dev), wr_ios),
+    util.NewSample(fmt.Sprintf("disk.%s.wr_kb", dev), wr_sec / 2),
   }
   return samples, nil
 }
@@ -186,9 +190,8 @@ func parseNetdevLine(line string) ([]*util.Sample, error) {
   var tx_byte, tx_pkt, tx_err, tx_drop uint64
   var tx_fifo, tx_coll, tx_carr, tx_comp uint64
 
-  _, err := fmt.Sscanf(
+  _, err := fmt.Sscanln(
     line,
-    "%s: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
     &dev,
     &rx_byte, &rx_pkt, &rx_err, &rx_drop,
     &rx_fifo, &rx_frame, &rx_comp, &rx_mcast,
@@ -197,15 +200,19 @@ func parseNetdevLine(line string) ([]*util.Sample, error) {
   if err != nil {
     return nil, err
   }
+  dev = dev[0:len(dev)-1]
+  if strings.HasPrefix(dev, "lo") {
+    return nil, nil
+  }
   samples := []*util.Sample{
-    util.NewSample("net.%s.rx.bytes", rx_byte),
-    util.NewSample("net.%s.rx.pkts", rx_pkt),
-    util.NewSample("net.%s.rx.errs", rx_pkt),
-    util.NewSample("net.%s.rx.drop", rx_pkt),
-    util.NewSample("net.%s.tx.bytes", tx_byte),
-    util.NewSample("net.%s.tx.pkts", tx_pkt),
-    util.NewSample("net.%s.tx.errs", tx_err),
-    util.NewSample("net.%s.tx.drop", tx_drop),
+    util.NewSample(fmt.Sprintf("net.%s.rx.bytes", dev), rx_byte),
+    util.NewSample(fmt.Sprintf("net.%s.rx.pkts", dev), rx_pkt),
+    util.NewSample(fmt.Sprintf("net.%s.rx.errs", dev), rx_err),
+    util.NewSample(fmt.Sprintf("net.%s.rx.drop", dev), rx_drop),
+    util.NewSample(fmt.Sprintf("net.%s.tx.bytes", dev), tx_byte),
+    util.NewSample(fmt.Sprintf("net.%s.tx.pkts", dev), tx_pkt),
+    util.NewSample(fmt.Sprintf("net.%s.tx.errs", dev), tx_err),
+    util.NewSample(fmt.Sprintf("net.%s.tx.drop", dev), tx_drop),
   }
   return samples, nil
 }
