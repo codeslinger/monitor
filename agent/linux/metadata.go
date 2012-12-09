@@ -1,29 +1,29 @@
 package linux
 
 import (
-  "fmt"
-  "os"
+//  "fmt"
+//  "os"
   "net"
   "strings"
-  "../../util"
+//  "../../util"
 )
 
-func Metadata() ([]*util.Metadata, error) {
-  host, err := os.Hostname()
-  if err != nil {
-    return nil, err
-  }
-  ips, err := ipv4ForInterfaces()
-  if err != nil {
-    return nil, err
-  }
-  m := make([]*util.Metadata, 0)
-  m = append(m, util.NewMetadata("host", host))
-  for ifname, ip := range ips {
-    m = append(m, util.NewMetadata(fmt.Sprintf("nic.%s", ifname), ip.String()))
-  }
-  return m, nil
-}
+// func Metadata() ([]*util.Metadata, error) {
+//   host, err := os.Hostname()
+//   if err != nil {
+//     return nil, err
+//   }
+//   ips, err := ipv4ForInterfaces()
+//   if err != nil {
+//     return nil, err
+//   }
+//   m := make([]*util.Metadata, 0)
+//   m = append(m, util.NewMetadata("host", host))
+//   for ifname, ip := range ips {
+//     m = append(m, util.NewMetadata(fmt.Sprintf("nic.%s", ifname), ip.String()))
+//   }
+//   return m, nil
+// }
 
 func ipv4ForInterfaces() (map[string]net.IP, error) {
   rv := make(map[string]net.IP)

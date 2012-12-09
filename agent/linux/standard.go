@@ -1,219 +1,461 @@
+// Linux-specific OS and machine-level statistics gathering.
 package linux
 
 import (
+  "bufio"
   "fmt"
-  "log"
+  "io"
   "strconv"
   "strings"
   "syscall"
   "../../util"
 )
 
-var linuxStatsFiles = map[string]util.LineParser{
-  "/proc/stat":      parseStatLine,
-  "/proc/loadavg":   parseLoadLine,
-  "/proc/meminfo":   parseMeminfoLine,
-  "/proc/diskstats": parseDiskstatLine,
-  "/etc/mtab":       parseMtabLine,
-  "/proc/net/dev":   parseNetdevLine,
+// #include <unistd.h>
+// #include <errno.h>
+import "C"
+
+// Retrieve the clock ticks per second on this kernel.
+func getHZ() (uint64, error) {
+  ticks, err := C.sysconf(C._SC_CLK_TCK)
+  if err != nil {
+    return 0, err
+  }
+  return uint64(ticks), nil
 }
 
-func StandardStats() []*util.Sample {
-  samples := make([]*util.Sample, 0)
-  for path, parser := range linuxStatsFiles {
-    s, err := util.StatsFromFile(path, parser)
-    if err != nil {
-      log.Printf("parser failure: %s: %s\n", path, err)
-      continue
+// Sampler for standard OS- and machine-level metrics. This sampler is an
+// aggregate of the CPUSampler, LoadSampler, MemorySampler, DiskIOSampler,
+// FSUsageSampler and NICSampler samplers.
+type StandardSampler struct {
+  cpu  *CPUSampler
+  load *LoadSampler
+  mem  *MemorySampler
+  disk *DiskIOSampler
+  fs   *FSUsageSampler
+  nic  *NICSampler
+}
+
+// Create a new standard sampler.
+func NewStandardSampler(o util.Opener, s util.SampleWriter) *StandardSampler {
+  return &StandardSampler{
+    cpu: NewCPUSampler(o, s),
+    load: NewLoadSampler(o, s),
+    mem: NewMemorySampler(o, s),
+    disk: NewDiskIOSampler(o, s),
+    fs: NewFSUsageSampler(o, s),
+    nic: NewNICSampler(o, s),
+  }
+}
+
+// Initialize this sampler. Delegates initialization to its underlying
+// samplers.
+func (standard *StandardSampler) Init() (err error) {
+  if err = standard.cpu.Init(); err != nil { return }
+  if err = standard.load.Init(); err != nil { return }
+  if err = standard.mem.Init(); err != nil { return }
+  if err = standard.disk.Init(); err != nil { return }
+  if err = standard.fs.Init(); err != nil { return }
+  if err = standard.nic.Init(); err != nil { return }
+  return
+}
+
+// Gather samples for all underlying samplers.
+func (standard *StandardSampler) Sample() (err error) {
+  if err = standard.cpu.Sample(); err != nil { return }
+  if err = standard.load.Sample(); err != nil { return }
+  if err = standard.mem.Sample(); err != nil { return }
+  if err = standard.disk.Sample(); err != nil { return }
+  if err = standard.fs.Sample(); err != nil { return }
+  if err = standard.nic.Sample(); err != nil { return }
+  return
+}
+
+// Sampler for CPU utilization metrics.
+type CPUSampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
+  HZ     uint64
+}
+
+// Create a new CPU utilization sampler.
+func NewCPUSampler(o util.Opener, s util.SampleWriter) *CPUSampler {
+  return &CPUSampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (stats *CPUSampler) Init() (err error) {
+  stats.HZ, err = getHZ()
+  return
+}
+
+// Gather current CPU utilization sample.
+func (stats *CPUSampler) Sample() (err error) {
+  f, err := stats.opener.Open("/proc/stat")
+  if err != nil {
+    return
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  for {
+    var line string
+
+    line, err = rd.ReadString('\n')
+    if err == io.EOF {
+      break
+    } else if err != nil {
+      return
     }
-    for _, v := range s {
-      samples = append(samples, v)
+    if err = stats.parseLine(line); err != nil {
+      return
     }
   }
-  return samples
+  return
 }
 
-func parseStatLine(line string) ([]*util.Sample, error) {
+// Parse an individual line from Linux's /proc/stat.
+func (stats *CPUSampler) parseLine(line string) (err error) {
   if !strings.HasPrefix(line, "cpu") {
-    return nil, nil
+    return
   }
 
   var dev string
   var user, nice, sys, idle, iowait, hardirq uint64
   var softirq, steal, guest, guest_nice uint64
 
-  _, err := fmt.Sscanf(line,
-                       "%s %d %d %d %d %d %d %d %d %d %d",
-                       &dev,
-                       &user, &nice, &sys, &idle, &iowait, &hardirq,
-                       &softirq, &steal, &guest, &guest_nice)
+  _, err = fmt.Sscanf(line,
+                      "%s %d %d %d %d %d %d %d %d %d %d",
+                      &dev,
+                      &user, &nice, &sys, &idle, &iowait, &hardirq,
+                      &softirq, &steal, &guest, &guest_nice)
   if err != nil {
-    return nil, err
+    return
   }
   if dev == "cpu" {
     // Overall CPU usage line; calculate machine uptime with this.
     // Don't include guest or guest_nice as user and nice already
     // account for these.
-    s := util.NewSample("uptime",
-                        (user + nice + sys + idle + iowait + hardirq +
-                         softirq + steal) / util.HZ)
-    return []*util.Sample{s}, nil
+    stats.sink.Write("uptime",
+                     (user + nice + sys + idle + iowait + hardirq +
+                      softirq + steal) / stats.HZ)
+    return
   }
   // Individual CPU usage line; calculate per-CPU metrics with this.
   idx := strings.Replace(dev, "cpu", "", 1)
-  samples := []*util.Sample{
-    util.NewSample(fmt.Sprintf("cpu.%s.user", idx), user / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.nice", idx), nice / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.sys", idx), sys / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.iowait", idx), iowait / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.steal", idx), steal / util.HZ),
-    util.NewSample(fmt.Sprintf("cpu.%s.idle", idx), idle / util.HZ),
-  }
-  return samples, nil
+  stats.sink.Write("cpu", idx, user / stats.HZ, sys / stats.HZ,
+                   nice / stats.HZ, iowait / stats.HZ, steal / stats.HZ,
+                   idle / stats.HZ)
+  return
 }
 
-func parseLoadLine(line string) ([]*util.Sample, error) {
+// Sampler for system load statistics.
+type LoadSampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
+}
+
+// Create a new system load sampler.
+func NewLoadSampler(o util.Opener, s util.SampleWriter) *LoadSampler {
+  return &LoadSampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (load *LoadSampler) Init() (err error) {
+  return
+}
+
+// Gather current system load statistics.
+func (load *LoadSampler) Sample() (err error) {
+  f, err := load.opener.Open("/proc/loadavg")
+  if err != nil {
+    return
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  var line string
+  line, err = rd.ReadString('\n')
+  if err != nil {
+    return
+  }
+  err = load.parseLine(line)
+  return
+}
+
+// Parse Linux's /proc/loadavg.
+func (load *LoadSampler) parseLine(line string) (err error) {
   var load1, load5, load15 float64
   var running, procs uint64
   var lastpid int
 
-  _, err := fmt.Sscanf(line,
-                       "%f %f %f %d/%d %d",
-                       &load1, &load5, &load15,
-                       &running, &procs, &lastpid)
+  _, err = fmt.Sscanf(line,
+                      "%f %f %f %d/%d %d",
+                      &load1, &load5, &load15,
+                      &running, &procs, &lastpid)
   if err != nil {
-    return nil, err
+    return
   }
-  samples := []*util.Sample{
-    util.NewSample("load.1m", uint64(load1 * 100)),
-    util.NewSample("load.5m", uint64(load5 * 100)),
-    util.NewSample("load.15m", uint64(load15 * 100)),
-    util.NewSample("load.proc", procs),
-  }
-  return samples, nil
+  load.sink.Write("load", load1, load5, load15, procs)
+  return
 }
 
-func parseMeminfoLine(line string) ([]*util.Sample, error) {
-  var s *util.Sample
-
-  p := strings.SplitN(strings.Trim(line, " \r\n"), ":", 2)
-  if len(p) < 2 {
-    return nil, nil
-  }
-  cmp := strings.Split(strings.Trim(p[1], " \r\n"), " ")[0]
-  val, err := strconv.ParseUint(cmp, 10, 64)
-  if err != nil {
-    return nil, err
-  }
-  switch p[0] {
-  case "MemTotal":  s = util.NewSample("mem.total", val)
-  case "MemFree":   s = util.NewSample("mem.free", val)
-  case "Buffers":   s = util.NewSample("mem.buffer", val)
-  case "Cached":    s = util.NewSample("mem.cache", val)
-  case "SwapFree":  s = util.NewSample("mem.swfree", val)
-  case "SwapTotal": s = util.NewSample("mem.swtot", val)
-  default:          s = nil
-  }
-  return []*util.Sample{s}, nil
+// Sampler for RAM usage statistics.
+type MemorySampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
 }
 
-func parseDiskstatLine(line string) ([]*util.Sample, error) {
+// Create a new RAM usage sampler.
+func NewMemorySampler(o util.Opener, s util.SampleWriter) *MemorySampler {
+  return &MemorySampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (mem *MemorySampler) Init() (err error) {
+  return
+}
+
+// Gather current RAM usage statistics.
+func (mem *MemorySampler) Sample() (err error) {
+  var total, free, buffer, cache, swapfree, swaptotal uint64
+
+  f, err := mem.opener.Open("/proc/meminfo")
+  if err != nil {
+    return
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  for {
+    var line string
+
+    line, err = rd.ReadString('\n')
+    if err == io.EOF {
+      break
+    } else if err != nil {
+      return
+    }
+    parts := strings.SplitN(line, ":", 2)
+    switch parts[0] {
+    case "MemTotal": total, err = mem.toUint(parts[1])
+    case "MemFree": free, err = mem.toUint(parts[1])
+    case "Buffers": buffer, err = mem.toUint(parts[1])
+    case "Cached": cache, err = mem.toUint(parts[1])
+    case "SwapFree": swapfree, err = mem.toUint(parts[1])
+    case "SwapTotal": swaptotal, err = mem.toUint(parts[1])
+    }
+    if err != nil {
+      return
+    }
+  }
+  mem.sink.Write("memory", total, free, buffer, cache, swaptotal, swapfree)
+  return
+}
+
+// Parse a uint out of a /proc/meminfo line.
+func (mem *MemorySampler) toUint(raw string) (uint64, error) {
+  return strconv.ParseUint(strings.Split(raw, " ")[0], 10, 64)
+}
+
+// Sampler for disk I/O statistics.
+type DiskIOSampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
+}
+
+// Create a new disk I/O sampler.
+func NewDiskIOSampler(o util.Opener, s util.SampleWriter) *DiskIOSampler {
+  return &DiskIOSampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (disk *DiskIOSampler) Init() (err error) {
+  return
+}
+
+// Gather current disk I/O statistics.
+func (disk *DiskIOSampler) Sample() (err error) {
+  f, err := disk.opener.Open("/proc/diskstats")
+  if err != nil {
+    return
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  for {
+    var line string
+
+    line, err = rd.ReadString('\n')
+    if err == io.EOF {
+      break
+    } else if err != nil {
+      return
+    }
+    if err = disk.parseLine(line); err != nil {
+      return
+    }
+  }
+  return
+}
+
+// Parse an individual line from Linux's /proc/diskstats.
+func (disk *DiskIOSampler) parseLine(line string) (err error) {
   var major, minor uint
   var dev string
   var rd_ios, rd_merges, rd_sec, rd_ticks uint64
   var wr_ios, wr_merges, wr_sec, wr_ticks uint64
   var ios_in_progress, total_ticks, rq_ticks uint64
 
-  _, err := fmt.Sscanf(line,
-                       "%d %d %s %d %d %d %d %d %d %d %d %d %d %d",
-                       &major, &minor, &dev,
-                       &rd_ios, &rd_merges, &rd_sec, &rd_ticks,
-                       &wr_ios, &wr_merges, &wr_sec, &wr_ticks,
-                       &ios_in_progress, &total_ticks, &rq_ticks)
+  _, err = fmt.Sscanf(line,
+                      "%d %d %s %d %d %d %d %d %d %d %d %d %d %d",
+                      &major, &minor, &dev,
+                      &rd_ios, &rd_merges, &rd_sec, &rd_ticks,
+                      &wr_ios, &wr_merges, &wr_sec, &wr_ticks,
+                      &ios_in_progress, &total_ticks, &rq_ticks)
   if err != nil {
-    return nil, err
+    return
   }
   // skip garbage devices
   if strings.HasPrefix(dev, "ram") || strings.HasPrefix(dev, "loop") {
-    return nil, nil
+    return
   }
-  samples := []*util.Sample{
-    util.NewSample(fmt.Sprintf("disk.%s.rd_op", dev), rd_ios),
-    util.NewSample(fmt.Sprintf("disk.%s.rd_kb", dev), rd_sec / 2),
-    util.NewSample(fmt.Sprintf("disk.%s.wr_op", dev), wr_ios),
-    util.NewSample(fmt.Sprintf("disk.%s.wr_kb", dev), wr_sec / 2),
-  }
-  return samples, nil
+  disk.sink.Write("disk", dev, rd_ios, rd_sec / 2, wr_ios, wr_sec / 2)
+  return
 }
 
-func parseMtabLine(line string) ([]*util.Sample, error) {
+// Sampler for filesystem usage statistics.
+type FSUsageSampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
+}
+
+// Create a new filesystem usage sampler.
+func NewFSUsageSampler(o util.Opener, s util.SampleWriter) *FSUsageSampler {
+  return &FSUsageSampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (fs *FSUsageSampler) Init() (err error) {
+  return
+}
+
+// Gather current filesystem usage statistics.
+func (fs *FSUsageSampler) Sample() (err error) {
+  f, err := fs.opener.Open("/etc/mtab")
+  if err != nil {
+    return
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  for {
+    var line string
+
+    line, err = rd.ReadString('\n')
+    if err == io.EOF {
+      break
+    } else if err != nil {
+      return
+    }
+    if err = fs.parseLine(line); err != nil {
+      return
+    }
+  }
+  return
+}
+
+// Parse an individual line from Linux's /etc/mtab.
+func (fs *FSUsageSampler) parseLine(line string) (err error) {
   var dev, mount, fstype, options string
   var dump, fsck_order uint64
   var buf syscall.Statfs_t
 
-  _, err := fmt.Sscanf(line,
-                       "%s %s %s %s %d %d",
-                       &dev, &mount, &fstype, &options,
-                       &dump, &fsck_order)
+  _, err = fmt.Sscanf(line,
+                      "%s %s %s %s %d %d",
+                      &dev, &mount, &fstype, &options,
+                      &dump, &fsck_order)
   if err != nil {
-    return nil, err
+    return
   }
   // only report on ext[234] filesystems for now
   if !strings.HasPrefix(fstype, "ext") {
-    return nil, nil
+    return
   }
-  if err := syscall.Statfs(mount, &buf); err != nil {
-    return nil, err
+  if err = syscall.Statfs(mount, &buf); err != nil {
+    return
   }
   if buf.Blocks == 0 {
-    return nil, nil
+    return
   }
   to1K := uint64(buf.Bsize) / 1024
-  samples := []*util.Sample{
-    util.NewSample(fmt.Sprintf("fs.%s.total", mount), buf.Blocks * to1K),
-    util.NewSample(fmt.Sprintf("fs.%s.free", mount), buf.Bfree * to1K),
-    util.NewSample(fmt.Sprintf("fs.%s.avail", mount), buf.Bavail * to1K),
-    util.NewSample(fmt.Sprintf("fs.%s.inode", mount), buf.Files),
-    util.NewSample(fmt.Sprintf("fs.%s.ifree", mount), buf.Ffree),
-  }
-  return samples, nil
+  fs.sink.Write("fs", mount, buf.Blocks * to1K, buf.Bfree * to1K,
+                buf.Bavail * to1K, buf.Files, buf.Ffree)
+  return
 }
 
-func parseNetdevLine(line string) ([]*util.Sample, error) {
-  if strings.Contains(line, "|") {
-    return nil, nil
-  }
+// Sampler for NIC utilization.
+type NICSampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
+}
 
+// Create a new NIC utilization sampler.
+func NewNICSampler(o util.Opener, s util.SampleWriter) *NICSampler {
+  return &NICSampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (nic *NICSampler) Init() (err error) {
+  return
+}
+
+// Gather current NIC utilization statistics.
+func (nic *NICSampler) Sample() (err error) {
+  f, err := nic.opener.Open("/etc/mtab")
+  if err != nil {
+    return
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  for {
+    var line string
+
+    line, err = rd.ReadString('\n')
+    if err == io.EOF {
+      break
+    } else if err != nil {
+      return
+    }
+    if err = nic.parseLine(line); err != nil {
+      return
+    }
+  }
+  return
+}
+
+// Parse an individual line from Linux's /proc/net/dev.
+func (nic *NICSampler) parseLine(line string) (err error) {
   var dev string
   var rx_byte, rx_pkt, rx_err, rx_drop uint64
   var rx_fifo, rx_frame, rx_comp, rx_mcast uint64
   var tx_byte, tx_pkt, tx_err, tx_drop uint64
   var tx_fifo, tx_coll, tx_carr, tx_comp uint64
 
-  _, err := fmt.Sscanln(
-    line,
-    &dev,
-    &rx_byte, &rx_pkt, &rx_err, &rx_drop,
-    &rx_fifo, &rx_frame, &rx_comp, &rx_mcast,
-    &tx_byte, &tx_pkt, &tx_err, &tx_drop,
-    &tx_fifo, &tx_coll, &tx_carr, &tx_comp)
+  if strings.Contains(line, "|") {
+    return
+  }
+  _, err = fmt.Sscanln(line,
+                       &dev,
+                       &rx_byte, &rx_pkt, &rx_err, &rx_drop,
+                       &rx_fifo, &rx_frame, &rx_comp, &rx_mcast,
+                       &tx_byte, &tx_pkt, &tx_err, &tx_drop,
+                       &tx_fifo, &tx_coll, &tx_carr, &tx_comp)
   if err != nil {
-    return nil, err
+    return
   }
   dev = dev[0:len(dev)-1]
   if strings.HasPrefix(dev, "lo") {
-    return nil, nil
+    return
   }
-  samples := []*util.Sample{
-    util.NewSample(fmt.Sprintf("net.%s.rx.bytes", dev), rx_byte),
-    util.NewSample(fmt.Sprintf("net.%s.rx.pkts", dev), rx_pkt),
-    util.NewSample(fmt.Sprintf("net.%s.rx.errs", dev), rx_err),
-    util.NewSample(fmt.Sprintf("net.%s.rx.drop", dev), rx_drop),
-    util.NewSample(fmt.Sprintf("net.%s.tx.bytes", dev), tx_byte),
-    util.NewSample(fmt.Sprintf("net.%s.tx.pkts", dev), tx_pkt),
-    util.NewSample(fmt.Sprintf("net.%s.tx.errs", dev), tx_err),
-    util.NewSample(fmt.Sprintf("net.%s.tx.drop", dev), tx_drop),
-  }
-  return samples, nil
+  nic.sink.Write("net", dev,
+                 rx_byte, rx_pkt, rx_err, rx_drop,
+                 tx_byte, tx_pkt, tx_err, tx_drop)
+  return
 }
 

@@ -1,8 +1,8 @@
+// Main routines for metric collection agent.
 package main
 
 import (
   "flag"
-  "fmt"
   "log"
   "os"
   "os/signal"
@@ -11,7 +11,10 @@ import (
   "../util"
 )
 
+// Number of seconds between samples.
 var sampleInterval int
+
+// Network address of collector to which to submit gathered samples.
 var collectorAddr string
 
 func init() {
@@ -21,34 +24,23 @@ func init() {
 
 func main() {
   flag.Parse()
-  //runtime.GOMAXPROCS(runtime.NumCPU())
   signalChan := make(chan os.Signal, 1)
   signal.Notify(signalChan, os.Interrupt, os.Kill)
   log.Printf("agent started: sampling every %d seconds\n", sampleInterval)
   ticker := time.NewTicker(time.Duration(sampleInterval) * time.Second)
-  metadata, err := linux.Metadata()
-  if err != nil {
-    log.Fatalf("could not determine metadata: %s", err)
+  sampler := linux.NewStandardSampler(util.NewFileOpener(),
+                                      util.NewConsoleSampleWriter())
+  if err := sampler.Init(); err != nil {
+    log.Fatalf("could not initialize sampler: %s\n", err)
   }
   for {
     select {
     case <-ticker.C:
-      collectAndSubmit(time.Now(), metadata)
+      sampler.Sample()
     case s := <-signalChan:
       log.Printf("caught signal %s: shutting down\n", s)
       return
     }
-  }
-}
-
-func collectAndSubmit(now time.Time, meta []*util.Metadata) {
-  samples := linux.StandardStats()
-  fmt.Printf("---Sample:%d---\n", now.Unix())
-  for _, m := range meta {
-    fmt.Println(m)
-  }
-  for _, s := range samples {
-    fmt.Println(s)
   }
 }
 
