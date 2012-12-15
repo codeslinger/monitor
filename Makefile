@@ -3,7 +3,7 @@ BUILDDIR = ./build
 TARGETS  = agent collector
 PACKAGES = util agent/linux agent collector
 
-GOTESTOPTS =
+GOTESTOPTS = -v
 
 all: compile test
 

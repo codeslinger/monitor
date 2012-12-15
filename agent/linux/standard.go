@@ -102,6 +102,7 @@ func (stats *CPUSampler) Sample() (err error) {
 
     line, err = rd.ReadString('\n')
     if err == io.EOF {
+      err = nil
       break
     } else if err != nil {
       return
@@ -136,14 +137,18 @@ func (stats *CPUSampler) parseLine(line string) (err error) {
     // Don't include guest or guest_nice as user and nice already
     // account for these.
     stats.sink.Write("uptime",
-                     (user + nice + sys + idle + iowait + hardirq +
-                      softirq + steal) / stats.HZ)
+                     (user + nice + sys + idle + iowait + hardirq + softirq + steal) / stats.HZ)
     return
   }
   // Individual CPU usage line; calculate per-CPU metrics with this.
   idx := strings.Replace(dev, "cpu", "", 1)
-  stats.sink.Write("cpu", idx, user / stats.HZ, sys / stats.HZ,
-                   nice / stats.HZ, iowait / stats.HZ, steal / stats.HZ,
+  stats.sink.Write("cpu",
+                   idx,
+                   user / stats.HZ,
+                   sys / stats.HZ,
+                   nice / stats.HZ,
+                   iowait / stats.HZ,
+                   steal / stats.HZ,
                    idle / stats.HZ)
   return
 }
