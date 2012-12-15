@@ -1,33 +1,21 @@
 # vim:set ts=8 ai:
-AGENT_SRCS = $(wildcard agent/*.go util/*.go)
-COLLECTOR_SRCS = $(wildcard collector/*.go util/*.go)
-
+BUILDDIR = ./build
 TARGETS  = agent collector
-BUILDDIR = build
+PACKAGES = util agent/linux agent collector
 
-all: $(TARGETS)
+GOTESTOPTS =
 
-$(BUILDDIR)/%:
-	@mkdir -p $(dir $@)
-	cd $* && go build -o $(abspath $@)
+all: compile test
 
-$(TARGETS): %: $(BUILDDIR)/%
+compile: $(TARGETS)
 
-$(BUILDDIR)/agent: $(AGENT_SRCS)
-$(BUILDDIR)/collector: $(COLLECTOR_SRCS)
+$(TARGETS):
+	@mkdir -p $(BUILDDIR) || true
+	go build -o $(BUILDDIR)/$@ ./$@
 
 test:
-	@for dir in $(TARGETS); do \
-	  cd $$dir; \
-	  go test; \
-	  cd ..; \
-	done
-
-deps:
-	@for dir in $(TARGETS); do \
-	  cd $$dir; \
-	  go get -v; \
-	  cd ..; \
+	@for pkg in $(PACKAGES); do \
+		go test $(GOTESTOPTS) ./$$pkg; \
 	done
 
 clean:
@@ -35,6 +23,6 @@ clean:
 
 over: clean all
 
-.PHONY: all test deps clean over
+.PHONY: all compile test clean over
 .PHONY: $(TARGETS)
 
