@@ -36,7 +36,9 @@ func main() {
   for {
     select {
     case <-ticker.C:
-      sampler.Sample()
+      if err := sampler.Sample(); err != nil {
+        log.Printf("error during sampling: %s\n", err)
+      }
     case s := <-signalChan:
       log.Printf("caught signal %s: shutting down\n", s)
       return

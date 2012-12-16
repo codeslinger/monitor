@@ -28,17 +28,19 @@ func getHZ() (uint64, error) {
 // aggregate of the CPUSampler, LoadSampler, MemorySampler, DiskIOSampler,
 // FSUsageSampler and NICSampler samplers.
 type StandardSampler struct {
-  cpu  *CPUSampler
-  load *LoadSampler
-  mem  *MemorySampler
-  disk *DiskIOSampler
-  fs   *FSUsageSampler
-  nic  *NICSampler
+  uptime *UptimeSampler
+  cpu    *CPUSampler
+  load   *LoadSampler
+  mem    *MemorySampler
+  disk   *DiskIOSampler
+  fs     *FSUsageSampler
+  nic    *NICSampler
 }
 
 // Create a new standard sampler.
 func NewStandardSampler(o util.Opener, s util.SampleWriter) *StandardSampler {
   return &StandardSampler{
+    uptime: NewUptimeSampler(o, s),
     cpu: NewCPUSampler(o, s),
     load: NewLoadSampler(o, s),
     mem: NewMemorySampler(o, s),
@@ -51,6 +53,7 @@ func NewStandardSampler(o util.Opener, s util.SampleWriter) *StandardSampler {
 // Initialize this sampler. Delegates initialization to its underlying
 // samplers.
 func (standard *StandardSampler) Init() (err error) {
+  if err = standard.uptime.Init(); err != nil { return }
   if err = standard.cpu.Init(); err != nil { return }
   if err = standard.load.Init(); err != nil { return }
   if err = standard.mem.Init(); err != nil { return }
@@ -62,12 +65,59 @@ func (standard *StandardSampler) Init() (err error) {
 
 // Gather samples for all underlying samplers.
 func (standard *StandardSampler) Sample() (err error) {
+  if err = standard.uptime.Sample(); err != nil { return }
   if err = standard.cpu.Sample(); err != nil { return }
   if err = standard.load.Sample(); err != nil { return }
   if err = standard.mem.Sample(); err != nil { return }
   if err = standard.disk.Sample(); err != nil { return }
   if err = standard.fs.Sample(); err != nil { return }
   if err = standard.nic.Sample(); err != nil { return }
+  return
+}
+
+// Sampler for host uptime metrics.
+type UptimeSampler struct {
+  opener util.Opener
+  sink   util.SampleWriter
+}
+
+// Create a new uptime sampler.
+func NewUptimeSampler(o util.Opener, s util.SampleWriter) *UptimeSampler {
+  return &UptimeSampler{opener: o, sink: s}
+}
+
+// Initialize this sampler.
+func (uptime *UptimeSampler) Init() (err error) {
+  return
+}
+
+// Gather current host uptime.
+func (uptime *UptimeSampler) Sample() (err error) {
+  var line string
+
+  f, err := uptime.opener.Open("/proc/uptime")
+  if err != nil {
+    return err
+  }
+  defer f.Close()
+  rd := bufio.NewReader(f)
+  line, err = rd.ReadString('\n')
+  if err != nil && err != io.EOF {
+    return
+  }
+  err = uptime.parseLine(line)
+  return
+}
+
+// Parse Linux's /proc/uptime output.
+func (uptime *UptimeSampler) parseLine(line string) (err error) {
+  var up, idle float64
+
+  _, err = fmt.Sscanln(line, &up, &idle)
+  if err != nil {
+    return
+  }
+  uptime.sink.Write("uptime", uint64(up))
   return
 }
 
@@ -133,11 +183,6 @@ func (stats *CPUSampler) parseLine(line string) (err error) {
     return
   }
   if dev == "cpu" {
-    // Overall CPU usage line; calculate machine uptime with this.
-    // Don't include guest or guest_nice as user and nice already
-    // account for these.
-    stats.sink.Write("uptime",
-                     (user + nice + sys + idle + iowait + hardirq + softirq + steal) / stats.HZ)
     return
   }
   // Individual CPU usage line; calculate per-CPU metrics with this.
@@ -179,7 +224,7 @@ func (load *LoadSampler) Sample() (err error) {
   rd := bufio.NewReader(f)
   var line string
   line, err = rd.ReadString('\n')
-  if err != nil {
+  if err != nil && err != io.EOF {
     return
   }
   err = load.parseLine(line)
@@ -234,18 +279,22 @@ func (mem *MemorySampler) Sample() (err error) {
 
     line, err = rd.ReadString('\n')
     if err == io.EOF {
+      err = nil
       break
     } else if err != nil {
       return
     }
-    parts := strings.SplitN(line, ":", 2)
+    parts := strings.Fields(line)
+    if len(parts) < 2 {
+      continue
+    }
     switch parts[0] {
-    case "MemTotal": total, err = mem.toUint(parts[1])
-    case "MemFree": free, err = mem.toUint(parts[1])
-    case "Buffers": buffer, err = mem.toUint(parts[1])
-    case "Cached": cache, err = mem.toUint(parts[1])
-    case "SwapFree": swapfree, err = mem.toUint(parts[1])
-    case "SwapTotal": swaptotal, err = mem.toUint(parts[1])
+    case "MemTotal:": total, err = mem.toUint(parts[1])
+    case "MemFree:": free, err = mem.toUint(parts[1])
+    case "Buffers:": buffer, err = mem.toUint(parts[1])
+    case "Cached:": cache, err = mem.toUint(parts[1])
+    case "SwapFree:": swapfree, err = mem.toUint(parts[1])
+    case "SwapTotal:": swaptotal, err = mem.toUint(parts[1])
     }
     if err != nil {
       return
@@ -257,7 +306,7 @@ func (mem *MemorySampler) Sample() (err error) {
 
 // Parse a uint out of a /proc/meminfo line.
 func (mem *MemorySampler) toUint(raw string) (uint64, error) {
-  return strconv.ParseUint(strings.Split(raw, " ")[0], 10, 64)
+  return strconv.ParseUint(strings.Trim(raw, " \r\n"), 10, 64)
 }
 
 // Sampler for disk I/O statistics.
@@ -289,6 +338,7 @@ func (disk *DiskIOSampler) Sample() (err error) {
 
     line, err = rd.ReadString('\n')
     if err == io.EOF {
+      err = nil
       break
     } else if err != nil {
       return
@@ -354,6 +404,7 @@ func (fs *FSUsageSampler) Sample() (err error) {
 
     line, err = rd.ReadString('\n')
     if err == io.EOF {
+      err = nil
       break
     } else if err != nil {
       return
@@ -389,8 +440,14 @@ func (fs *FSUsageSampler) parseLine(line string) (err error) {
     return
   }
   to1K := uint64(buf.Bsize) / 1024
-  fs.sink.Write("fs", mount, buf.Blocks * to1K, buf.Bfree * to1K,
-                buf.Bavail * to1K, buf.Files, buf.Ffree)
+  fs.sink.Write("fs",
+                dev,
+                mount,
+                buf.Blocks * to1K,
+                buf.Bfree * to1K,
+                buf.Bavail * to1K,
+                buf.Files,
+                buf.Ffree)
   return
 }
 
@@ -412,7 +469,7 @@ func (nic *NICSampler) Init() (err error) {
 
 // Gather current NIC utilization statistics.
 func (nic *NICSampler) Sample() (err error) {
-  f, err := nic.opener.Open("/etc/mtab")
+  f, err := nic.opener.Open("/proc/net/dev")
   if err != nil {
     return
   }
@@ -423,6 +480,7 @@ func (nic *NICSampler) Sample() (err error) {
 
     line, err = rd.ReadString('\n')
     if err == io.EOF {
+      err = nil
       break
     } else if err != nil {
       return
@@ -458,7 +516,8 @@ func (nic *NICSampler) parseLine(line string) (err error) {
   if strings.HasPrefix(dev, "lo") {
     return
   }
-  nic.sink.Write("net", dev,
+  nic.sink.Write("net",
+                 dev,
                  rx_byte, rx_pkt, rx_err, rx_drop,
                  tx_byte, tx_pkt, tx_err, tx_drop)
   return
