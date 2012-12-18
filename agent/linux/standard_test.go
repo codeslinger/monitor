@@ -2,6 +2,7 @@ package linux
 
 import (
   "fmt"
+  "github.com/bmizerany/assert"
   "io"
   "strings"
   "testing"
@@ -164,20 +165,6 @@ func (b *BufferedSampleWriter) Write(v ...interface{}) {
   b.Lines = append(b.Lines, fmt.Sprintln(v...))
 }
 
-func AssertStringEquals(t *testing.T, expected, actual string) {
-  if expected != actual {
-    t.Fatalf("failed expectation: '%s' != '%s'",
-             strings.Trim(expected, "\r\n"),
-             strings.Trim(actual, "\r\n"))
-  }
-}
-
-func AssertUint64Equals(t *testing.T, expected, actual uint64) {
-  if expected != actual {
-    t.Fatalf("failed expectation: %d != %d", expected, actual)
-  }
-}
-
 func Test_CPUSampler_should_parse_valid_proc_stats_file_properly(t *testing.T) {
   wr := NewBufferedSampleWriter()
   sampler := NewCPUSampler(NewStringOpener(procStatsOutput), wr)
@@ -185,10 +172,10 @@ func Test_CPUSampler_should_parse_valid_proc_stats_file_properly(t *testing.T) {
   if err := sampler.Sample(); err != nil {
     t.Fatalf("Sample() failed: %s", err)
   }
-  AssertStringEquals(t, "cpu 0 4450 1844 59 679 0 228028\n", wr.Lines[0])
-  AssertStringEquals(t, "cpu 1 2538 573 7 109 0 233728\n", wr.Lines[1])
-  AssertStringEquals(t, "cpu 2 4463 1275 46 809 0 230051\n", wr.Lines[2])
-  AssertStringEquals(t, "cpu 3 2325 561 9 169 0 233913\n", wr.Lines[3])
+  assert.Equal(t, "cpu 0 4450 1844 59 679 0 228028\n", wr.Lines[0])
+  assert.Equal(t, "cpu 1 2538 573 7 109 0 233728\n", wr.Lines[1])
+  assert.Equal(t, "cpu 2 4463 1275 46 809 0 230051\n", wr.Lines[2])
+  assert.Equal(t, "cpu 3 2325 561 9 169 0 233913\n", wr.Lines[3])
 }
 
 func Test_LoadSampler_should_parse_valid_proc_loadavg_file_properly(t *testing.T) {
@@ -197,7 +184,7 @@ func Test_LoadSampler_should_parse_valid_proc_loadavg_file_properly(t *testing.T
   if err := sampler.Sample(); err != nil {
     t.Fatalf("Sample() failed: %s", err)
   }
-  AssertStringEquals(t, "load 0 0.02 0.05 406\n", wr.Lines[0])
+  assert.Equal(t, "load 0 0.02 0.05 406\n", wr.Lines[0])
 }
 
 func Test_MemorySampler_should_parse_valid_proc_meminfo_file_properly(t *testing.T) {
@@ -206,7 +193,7 @@ func Test_MemorySampler_should_parse_valid_proc_meminfo_file_properly(t *testing
   if err := sampler.Sample(); err != nil {
     t.Fatalf("Sample() failed: %s", err)
   }
-  AssertStringEquals(
+  assert.Equal(
     t,
     "memory 3353936 1071244 149540 770616 3487740 3487740\n",
     wr.Lines[0])
@@ -218,10 +205,10 @@ func Test_DiskIOSampler_should_parse_valid_proc_diskstats_file_properly(t *testi
   if err := sampler.Sample(); err != nil {
     t.Fatalf("Sample() failed: %s", err)
   }
-  AssertStringEquals(t, "disk sda 50762 837027 23942 281576\n", wr.Lines[0])
-  AssertStringEquals(t, "disk sda1 50432 835589 23118 281576\n", wr.Lines[1])
-  AssertStringEquals(t, "disk sda2 2 2 0 0\n", wr.Lines[2])
-  AssertStringEquals(t, "disk sda5 161 768 0 0\n", wr.Lines[3])
+  assert.Equal(t, "disk sda 50762 837027 23942 281576\n", wr.Lines[0])
+  assert.Equal(t, "disk sda1 50432 835589 23118 281576\n", wr.Lines[1])
+  assert.Equal(t, "disk sda2 2 2 0 0\n", wr.Lines[2])
+  assert.Equal(t, "disk sda5 161 768 0 0\n", wr.Lines[3])
 }
 
 func Test_NICSampler_should_parse_valid_proc_net_dev_file_properly(t *testing.T) {
@@ -230,7 +217,7 @@ func Test_NICSampler_should_parse_valid_proc_net_dev_file_properly(t *testing.T)
   if err := sampler.Sample(); err != nil {
     t.Fatalf("Sample() failed: %s", err)
   }
-  AssertStringEquals(
+  assert.Equal(
     t,
     "net eth0 16651766 30158 0 0 4036294 22014 0 0\n",
     wr.Lines[0])
